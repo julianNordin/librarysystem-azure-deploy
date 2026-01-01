@@ -1,0 +1,25 @@
+# Normalise line endings to LF in the repository and in the working tree.
+#
+# This repo is built on Windows but its pipeline runs on Linux runners, and the
+# two App Services are deployed from zip packages built in CI. Committing LF
+# everywhere means a file has one representation regardless of where it was
+# written, and it silences the "LF will be replaced by CRLF" warnings that
+# core.autocrlf produces on this machine.
+* text=auto eol=lf
+
+# Windows shell scripts are the exception: cmd.exe requires CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binaries — never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+*.zip binary
+*.dll binary
+*.exe binary
