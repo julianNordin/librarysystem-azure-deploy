@@ -32,6 +32,31 @@ builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
 
+// Named rather than a default policy, so that UseCors below states which policy it applies.
+const string SpaCorsPolicy = "SpaCors";
+
+// The SPA is deployed to a different App Service than the API, so the browser makes a real
+// cross-origin request. Locally the Vite dev server proxies /api instead, so this list is
+// empty in development - and an empty list correctly trusts no cross-origin caller at all,
+// rather than falling back to trusting every one.
+var allowedOrigins = builder.Configuration
+    .GetSection("Cors:AllowedOrigins")
+    .Get<string[]>() ?? [];
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(SpaCorsPolicy, policy =>
+    {
+        if (allowedOrigins.Length == 0)
+        {
+            return;
+        }
+
+        policy.WithOrigins(allowedOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
 
 // AddDbContextCheck opens a connection through AppDbContext, so /health reports unhealthy
 // when the database is unreachable instead of only when the process is dead. App Service's
@@ -67,6 +92,10 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+// Ahead of UseAuthorization: a preflight request carries no credentials for authorization to
+// act on, and a response that authorization rejects still needs its CORS headers to be
+// readable by the browser.
+app.UseCors(SpaCorsPolicy);
 
 app.UseAuthorization();
 
