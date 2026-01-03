@@ -32,6 +32,13 @@ builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
 
+
+// AddDbContextCheck opens a connection through AppDbContext, so /health reports unhealthy
+// when the database is unreachable instead of only when the process is dead. App Service's
+// own health check and the pipeline's smoke test both read this endpoint.
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<AppDbContext>();
+
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
@@ -60,9 +67,11 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHealthChecks("/health");
 
 app.Run();
 
