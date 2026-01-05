@@ -69,16 +69,9 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    if (db.Database.IsRelational())
-    {
-        db.Database.Migrate();
-    }
-    else
-    {
-        db.Database.EnsureCreated();
-    }
-
-    DbInitializer.Initialize(db);
+    DatabaseStartup.Initialize(
+        db,
+        app.Configuration.GetValue("Database:MigrateOnStartup", true));
 }
 
 app.UseExceptionHandler();
