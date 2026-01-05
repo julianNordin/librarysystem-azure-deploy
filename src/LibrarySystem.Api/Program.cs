@@ -77,7 +77,9 @@ using (var scope = app.Services.CreateScope())
 app.UseExceptionHandler();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+// Gated on configuration rather than on the environment: the deployed API is a portfolio
+// artefact that is meant to be browsable, and IsDevelopment() would have hidden it in Azure.
+if (app.Configuration.GetValue<bool>("Swagger:Enabled"))
 {
     app.UseSwagger();
     app.UseSwaggerUI();
