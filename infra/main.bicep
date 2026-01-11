@@ -20,6 +20,7 @@ param appServicePlanSku string = 'F1'
 var uniqueSuffix = uniqueString(resourceGroup().id)
 
 var planName = 'plan-librarysystem-${environmentName}'
+var apiAppName = 'app-librarysystem-api-${uniqueSuffix}'
 
 var skuTiers = {
   F1: 'Free'
@@ -45,3 +46,31 @@ resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
     reserved: false
   }
 }
+
+resource apiApp 'Microsoft.Web/sites@2023-12-01' = {
+  name: apiAppName
+  location: location
+  properties: {
+    serverFarmId: plan.id
+    httpsOnly: true
+    siteConfig: {
+      netFrameworkVersion: 'v9.0'
+      healthCheckPath: '/health'
+      ftpsState: 'Disabled'
+      minTlsVersion: '1.2'
+      alwaysOn: supportsAlwaysOn
+      appSettings: [
+        {
+          name: 'ASPNETCORE_ENVIRONMENT'
+          value: 'Production'
+        }
+      ]
+    }
+  }
+}
+
+@description('The API\'s hostname, read from the resource rather than constructed. The default hostname is normally <name>.azurewebsites.net, but the unique-default-hostname feature can append a suffix, and anything that builds the string by hand breaks silently when it does.')
+output apiHostName string = apiApp.properties.defaultHostName
+
+@description('The API app\'s resource name, so deployment steps do not have to recompute the unique suffix.')
+output apiAppName string = apiApp.name
