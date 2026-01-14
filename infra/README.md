@@ -50,3 +50,31 @@ it is the fix if the noise ever hides something real.
 
 Deploying twice in a row is expected to succeed both times and change nothing the second time.
 The plan resource correctly reports `NoChange`; the site reports the false positive above.
+
+## Key Vault soft delete, and why purge protection is deliberately off
+
+Soft delete is enabled with the minimum 7-day retention. Purge protection is **not** enabled,
+and that is a deliberate decision rather than an oversight.
+
+The vault's name is derived from `uniqueString(resourceGroup().id)`, so tearing the environment
+down and rebuilding it into a resource group of the same name produces **the same vault name**.
+A soft-deleted vault still owns its name for the whole retention period, so the rebuild collides
+with its own predecessor and fails with a name-in-use error that looks nothing like the actual
+cause.
+
+With purge protection off, the deleted vault can be purged and the name released immediately,
+which is what the teardown script does:
+
+```bash
+az keyvault purge --name <vault name> --location swedencentral
+```
+
+With purge protection **on**, that command is refused by design — a protected vault cannot be
+purged before its retention expires, by anyone, including the subscription owner. Recreating the
+name would then require `createMode: 'recover'` in the template, which resurrects the old vault
+and its old secrets instead of creating a clean one.
+
+For anything real, purge protection should be on: it is exactly the control that stops an
+attacker, or a mistake, from destroying secrets irrecoverably. It is off here because this
+environment's whole purpose is to be destroyed and rebuilt on demand, and those two goals are
+genuinely in conflict. The trade is recorded rather than hidden.
