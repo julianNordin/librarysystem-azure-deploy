@@ -110,6 +110,10 @@ resource apiAppSettings 'Microsoft.Web/sites/config@2023-12-01' = {
   name: 'appsettings'
   properties: {
     ASPNETCORE_ENVIRONMENT: 'Production'
+    // True for now, so the application creates its own schema. The migrations phase moves this
+    // job into the pipeline and flips this to false, at which point the running application no
+    // longer needs DDL rights against the database.
+    Database__MigrateOnStartup: 'true'
     // A pointer, not a password. App Service resolves this at startup using the app's own
     // identity, so the secret's value never appears in application configuration at all.
     ConnectionStrings__DefaultConnection: keyVault.outputs.secretReference
