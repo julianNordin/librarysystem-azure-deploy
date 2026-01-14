@@ -72,6 +72,11 @@ var sqlConnectionString = 'Server=tcp:${sql.outputs.serverFullyQualifiedDomainNa
 resource apiApp 'Microsoft.Web/sites@2023-12-01' = {
   name: apiAppName
   location: location
+  // A system-assigned identity is created and deleted with the app and has no credential to
+  // rotate, leak, or commit. It is the thing the vault grants access to.
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
@@ -81,17 +86,33 @@ resource apiApp 'Microsoft.Web/sites@2023-12-01' = {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
       alwaysOn: supportsAlwaysOn
-      appSettings: [
-        {
-          name: 'ASPNETCORE_ENVIRONMENT'
-          value: 'Production'
-        }
-        {
-          name: 'ConnectionStrings__DefaultConnection'
-          value: sqlConnectionString
-        }
-      ]
     }
+  }
+}
+
+module keyVault 'modules/keyvault.bicep' = {
+  name: 'keyvault'
+  params: {
+    location: location
+    uniqueSuffix: uniqueSuffix
+    apiPrincipalId: apiApp.identity.principalId
+    sqlConnectionString: sqlConnectionString
+  }
+}
+
+// Application settings sit in their own resource rather than inside siteConfig above, and that
+// is what breaks an otherwise circular dependency. The vault's role assignment needs the app's
+// managed identity, so the vault has to come after the app; but the app's settings have to
+// reference the vault, so they have to come after it. Splitting the settings out turns a loop
+// into a chain: app, then vault, then settings.
+resource apiAppSettings 'Microsoft.Web/sites/config@2023-12-01' = {
+  parent: apiApp
+  name: 'appsettings'
+  properties: {
+    ASPNETCORE_ENVIRONMENT: 'Production'
+    // A pointer, not a password. App Service resolves this at startup using the app's own
+    // identity, so the secret's value never appears in application configuration at all.
+    ConnectionStrings__DefaultConnection: keyVault.outputs.secretReference
   }
 }
 
@@ -109,3 +130,6 @@ output sqlServerName string = sql.outputs.serverName
 
 @description('Database name, for the migration step.')
 output sqlDatabaseName string = sql.outputs.databaseName
+
+@description('Key Vault name, for verifying that the secret reference resolved.')
+output keyVaultName string = keyVault.outputs.vaultName
