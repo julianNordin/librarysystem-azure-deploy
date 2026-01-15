@@ -28,6 +28,7 @@ var uniqueSuffix = uniqueString(resourceGroup().id)
 
 var planName = 'plan-librarysystem-${environmentName}'
 var apiAppName = 'app-librarysystem-api-${uniqueSuffix}'
+var webAppName = 'app-librarysystem-web-${uniqueSuffix}'
 
 var skuTiers = {
   F1: 'Free'
@@ -90,6 +91,25 @@ resource apiApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
+// The SPA shares the API's plan. A second app on the same plan costs nothing extra, and it is
+// what forces the CORS policy to be real rather than theoretical: two apps means two origins.
+resource webApp 'Microsoft.Web/sites@2023-12-01' = {
+  name: webAppName
+  location: location
+  properties: {
+    serverFarmId: plan.id
+    httpsOnly: true
+    siteConfig: {
+      ftpsState: 'Disabled'
+      minTlsVersion: '1.2'
+      alwaysOn: supportsAlwaysOn
+      defaultDocuments: [
+        'index.html'
+      ]
+    }
+  }
+}
+
 module keyVault 'modules/keyvault.bicep' = {
   name: 'keyvault'
   params: {
@@ -114,6 +134,9 @@ resource apiAppSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     // job into the pipeline and flips this to false, at which point the running application no
     // longer needs DDL rights against the database.
     Database__MigrateOnStartup: 'true'
+    // The SPA's origin, supplied by the deployment rather than hardcoded anywhere. The scheme
+    // matters: the browser sends the origin as https, and an http value here would not match.
+    Cors__AllowedOrigins__0: 'https://${webApp.properties.defaultHostName}'
     // A pointer, not a password. App Service resolves this at startup using the app's own
     // identity, so the secret's value never appears in application configuration at all.
     ConnectionStrings__DefaultConnection: keyVault.outputs.secretReference
@@ -137,3 +160,9 @@ output sqlDatabaseName string = sql.outputs.databaseName
 
 @description('Key Vault name, for verifying that the secret reference resolved.')
 output keyVaultName string = keyVault.outputs.vaultName
+
+@description('The SPA\'s hostname. The deploy pipeline builds the front end against the API hostname and publishes it here.')
+output webHostName string = webApp.properties.defaultHostName
+
+@description('The SPA app\'s resource name, for the deployment step.')
+output webAppName string = webApp.name
