@@ -58,6 +58,17 @@ builder.Services.AddCors(options =>
     });
 });
 
+// The deployment supplies this from the monitoring module's output; locally and under test it is
+// absent. The guard is required, not defensive tidiness: this package now resolves to the
+// OpenTelemetry-based Azure Monitor exporter, which throws "A connection string was not found"
+// while the service provider is being built. Registering it unconditionally takes down every
+// test that starts the application, with a failure that names telemetry nowhere in its message.
+var applicationInsightsConnectionString = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+if (!string.IsNullOrWhiteSpace(applicationInsightsConnectionString))
+{
+    builder.Services.AddApplicationInsightsTelemetry();
+}
+
 // AddDbContextCheck opens a connection through AppDbContext, so /health reports unhealthy
 // when the database is unreachable instead of only when the process is dead. App Service's
 // own health check and the pipeline's smoke test both read this endpoint.
