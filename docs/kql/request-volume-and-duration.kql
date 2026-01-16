@@ -1,0 +1,14 @@
+// Request volume and latency, bucketed by hour.
+//
+// percentile(duration, 95) rather than avg(): an average hides the slow tail, and on this
+// deployment the tail is the interesting part. F1 has no Always On, so the app cold-starts after
+// idling, and the serverless database resumes from auto-pause on top of that. Those show up as
+// a p95 far above the median rather than as a shifted average.
+requests
+| where timestamp > ago(24h)
+| summarize
+    count(),
+    median = percentile(duration, 50),
+    p95 = percentile(duration, 95)
+  by bin(timestamp, 1h), name
+| order by timestamp desc, count_ desc

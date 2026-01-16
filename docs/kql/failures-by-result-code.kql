@@ -1,0 +1,11 @@
+// Failures grouped by result code and route.
+//
+// Split by resultCode rather than lumping all failures together, because the codes mean very
+// different things here. A 404 from /api/books/{id} is the API behaving correctly for a missing
+// row. A 500 is a defect. A 503 usually means the platform, not the code - an instance recycling
+// or the database still resuming.
+requests
+| where timestamp > ago(24h)
+| where success == false
+| summarize count() by resultCode, name
+| order by count_ desc

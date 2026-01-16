@@ -1,0 +1,19 @@
+// Calls the API made out to Azure SQL.
+//
+// This is the query worth showing. Request telemetry only proves the web tier answered;
+// dependency telemetry proves the call reached through to the database and came back, and it
+// attributes the time between the two tiers. When a request is slow, this is what says whether
+// the API was slow or the database was.
+//
+// Expect the first row after an idle period to be dramatically slower than the rest: that is the
+// serverless database resuming from auto-pause, not a query problem.
+dependencies
+| where timestamp > ago(24h)
+| where type has "SQL"
+| summarize
+    calls = count(),
+    failed = countif(success == false),
+    median = percentile(duration, 50),
+    p95 = percentile(duration, 95)
+  by target, name
+| order by calls desc
