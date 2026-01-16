@@ -110,6 +110,14 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
+module monitoring 'modules/monitoring.bicep' = {
+  name: 'monitoring'
+  params: {
+    location: location
+    environmentName: environmentName
+  }
+}
+
 module keyVault 'modules/keyvault.bicep' = {
   name: 'keyvault'
   params: {
@@ -137,6 +145,8 @@ resource apiAppSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     // The SPA's origin, supplied by the deployment rather than hardcoded anywhere. The scheme
     // matters: the browser sends the origin as https, and an http value here would not match.
     Cors__AllowedOrigins__0: 'https://${webApp.properties.defaultHostName}'
+    // The SDK reads this name by convention, so wiring it here is the whole integration.
+    APPLICATIONINSIGHTS_CONNECTION_STRING: monitoring.outputs.applicationInsightsConnectionString
     // A pointer, not a password. App Service resolves this at startup using the app's own
     // identity, so the secret's value never appears in application configuration at all.
     ConnectionStrings__DefaultConnection: keyVault.outputs.secretReference
@@ -166,3 +176,6 @@ output webHostName string = webApp.properties.defaultHostName
 
 @description('The SPA app\'s resource name, for the deployment step.')
 output webAppName string = webApp.name
+
+@description('Application Insights component name, for querying telemetry after a deployment.')
+output applicationInsightsName string = monitoring.outputs.applicationInsightsName
