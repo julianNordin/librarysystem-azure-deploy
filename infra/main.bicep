@@ -62,6 +62,7 @@ module sql 'modules/sql.bicep' = {
     uniqueSuffix: uniqueSuffix
     administratorLogin: sqlAdministratorLogin
     administratorLoginPassword: sqlAdministratorLoginPassword
+    apiOutboundIpAddresses: split(apiApp.properties.possibleOutboundIpAddresses, ',')
   }
 }
 
@@ -153,6 +154,42 @@ resource apiAppSettings 'Microsoft.Web/sites/config@2023-12-01' = {
   }
 }
 
+// Basic authentication on the publishing endpoints is a username and password that can deploy
+// code. Turning it off leaves Entra ID as the only way in, which is what makes the pipeline's
+// federated credential the actual access path rather than merely the preferred one.
+//
+// scm covers zip deploy and the Kudu console; ftp covers FTP publishing, which nothing here uses.
+resource apiScmPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12-01' = {
+  parent: apiApp
+  name: 'scm'
+  properties: {
+    allow: false
+  }
+}
+
+resource apiFtpPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12-01' = {
+  parent: apiApp
+  name: 'ftp'
+  properties: {
+    allow: false
+  }
+}
+
+resource webScmPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12-01' = {
+  parent: webApp
+  name: 'scm'
+  properties: {
+    allow: false
+  }
+}
+
+resource webFtpPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12-01' = {
+  parent: webApp
+  name: 'ftp'
+  properties: {
+    allow: false
+  }
+}
 @description('The API\'s hostname, read from the resource rather than constructed. The default hostname is normally <name>.azurewebsites.net, but the unique-default-hostname feature can append a suffix, and anything that builds the string by hand breaks silently when it does.')
 output apiHostName string = apiApp.properties.defaultHostName
 
