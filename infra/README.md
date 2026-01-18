@@ -78,3 +78,44 @@ For anything real, purge protection should be on: it is exactly the control that
 attacker, or a mistake, from destroying secrets irrecoverably. It is off here because this
 environment's whole purpose is to be destroyed and rebuilt on demand, and those two goals are
 genuinely in conflict. The trade is recorded rather than hidden.
+
+## Removing a resource from the template does not delete it
+
+Deployments here run in **incremental** mode, which is the default and the right choice. It adds
+and updates what the template describes and *leaves everything else alone* — including resources
+the template used to declare and no longer does.
+
+Replacing the broad allow-Azure-services firewall rule with per-address rules demonstrated this
+exactly: the new rules appeared, the old rule stayed, and the server ended up with both. The
+narrowing had visibly "worked" while the thing being narrowed was still in place.
+
+Removed resources have to be deleted explicitly:
+
+```bash
+az sql server firewall-rule delete -g rg-librarysystem-dev -s <server> -n AllowAzureServices
+```
+
+Complete-mode deployment would delete them automatically, and would also delete anything else in
+the resource group that the template does not describe. That is a far larger blast radius than
+this buys.
+
+## The SQL firewall lists possible outbound addresses, not current ones
+
+The rules are generated from the API app's `possibleOutboundIpAddresses`, not
+`outboundIpAddresses`. The second is only the handful currently in use; App Service moves an app
+between the addresses in the first set without notice, so a firewall pinned to today's addresses
+fails intermittently, later, for no visible reason.
+
+**Changing the plan's tier can change the set itself.** The slot phase scales to S1 and back, so
+it must redeploy the template rather than assume the existing rules still cover the app.
+
+The genuinely correct design is VNet integration with a private endpoint, leaving the database
+with no public surface at all. That requires Standard tier or better, so it is out of reach on F1
+and is recorded as further work rather than pretended away.
+
+## Basic publishing credentials are disabled, and deployment still works
+
+`scm` and `ftp` basic authentication are off on both apps, so a username and password can no
+longer deploy code. `az webapp deploy` continues to work because it authenticates with the Entra
+token from `az login` rather than with basic auth — which is the same mechanism the pipeline's
+federated credential uses, and the reason turning this off costs nothing here.
