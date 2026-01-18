@@ -14,6 +14,9 @@ param administratorLoginPassword string
 @description('Minutes of inactivity before the serverless database pauses. The free offer requires auto-pause to be enabled.')
 param autoPauseDelayMinutes int = 60
 
+@description('Outbound addresses the API app may originate connections from. Supply possibleOutboundIpAddresses, not outboundIpAddresses: the latter is only the set currently in use, and App Service may move the app to any address in the former without warning.')
+param apiOutboundIpAddresses array = []
+
 var serverName = 'sql-librarysystem-${uniqueSuffix}'
 var databaseName = 'sqldb-librarysystem'
 
@@ -52,17 +55,27 @@ resource database 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
   }
 }
 
-// The 0.0.0.0-0.0.0.0 range is a sentinel meaning "any Azure service", not a literal address.
-// It is broader than it looks: it admits Azure resources belonging to any tenant, not only this
-// subscription. The security phase replaces it with the API app's own outbound addresses.
-resource allowAzureServices 'Microsoft.Sql/servers/firewallRules@2023-08-01-preview' = {
-  parent: sqlServer
-  name: 'AllowAzureServices'
-  properties: {
-    startIpAddress: '0.0.0.0'
-    endIpAddress: '0.0.0.0'
+// One single-address rule per address the API app might originate from, replacing the
+// 0.0.0.0-0.0.0.0 sentinel that previously admitted any Azure resource in any tenant.
+//
+// This is the full possible set rather than the three currently in use. App Service moves an app
+// between the addresses in that set without notice, so a firewall pinned to today's three fails
+// intermittently and for no visible reason. Changing the plan's tier can change the set itself,
+// which is why the scale-up phase has to redeploy this rather than leave it alone.
+//
+// The genuinely correct answer is VNet integration with a private endpoint, so the database has
+// no public surface at all. That needs a Standard tier or better and so is out of reach on F1;
+// it is recorded as further work rather than pretended away.
+resource apiOutboundRules 'Microsoft.Sql/servers/firewallRules@2023-08-01-preview' = [
+  for (ipAddress, index) in apiOutboundIpAddresses: {
+    parent: sqlServer
+    name: 'AllowApiOutbound-${index}'
+    properties: {
+      startIpAddress: ipAddress
+      endIpAddress: ipAddress
+    }
   }
-}
+]
 
 output serverFullyQualifiedDomainName string = sqlServer.properties.fullyQualifiedDomainName
 output serverName string = sqlServer.name
