@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Read-only. This workflow builds and tests; it touches no cloud resource and needs no
+# token beyond fetching the code.
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API build and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore LibrarySystem.sln
+
+      - name: Build
+        # Warnings fail the build here even though they do not locally. A warning nobody is
+        # forced to look at is a warning that accumulates until the output is worthless.
+        run: dotnet build LibrarySystem.sln --no-restore -c Release -warnaserror
+
+      - name: Test
+        run: dotnet test LibrarySystem.sln --no-build -c Release
+
+  web:
+    name: Web build and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/web
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+          # The lockfile is not at the repository root in this monorepo, and the cache silently
+          # does nothing if it is not pointed at the right one.
+          cache-dependency-path: src/web/package-lock.json
+
+      - name: Install
+        # ci rather than install: it installs exactly the lockfile and fails if package.json and
+        # the lockfile disagree, which is what a build machine should do.
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
