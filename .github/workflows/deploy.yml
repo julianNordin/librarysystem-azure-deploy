@@ -1,0 +1,128 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# id-token: write is what lets the job request an OIDC token from GitHub. Without it,
+# azure/login fails with a message about being unable to acquire a token, which reads like a
+# problem with the federated credential rather than a missing permission on the job.
+permissions:
+  id-token: write
+  contents: read
+
+# One deployment at a time. Two overlapping runs would race on the same resource group, and the
+# second would deploy an older artefact over a newer one if it happened to finish last.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AZURE_RESOURCE_GROUP: rg-librarysystem-dev
+  AZURE_LOCATION: swedencentral
+
+jobs:
+  infrastructure:
+    name: Infrastructure
+    runs-on: ubuntu-latest
+    outputs:
+      apiAppName: ${{ steps.outputs.outputs.apiAppName }}
+      apiHostName: ${{ steps.outputs.outputs.apiHostName }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          # Identifiers, not credentials. They say which identity to attempt to become; the
+          # token GitHub mints for this specific repository and branch is what actually
+          # authenticates. None of the three is secret, so all three are variables.
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure the resource group exists
+        run: |
+          az group create \
+            --name "$AZURE_RESOURCE_GROUP" \
+            --location "$AZURE_LOCATION" \
+            --output none
+
+      - name: Deploy Bicep
+        env:
+          # main.bicepparam reads this with readEnvironmentVariable, so the password reaches the
+          # template through the environment rather than as a command line argument that would
+          # appear in the process list and in the run log's command echo.
+          SQL_ADMIN_PASSWORD: ${{ secrets.SQL_ADMIN_PASSWORD }}
+        run: |
+          az deployment group create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name librarysystem-infra \
+            --template-file infra/main.bicep \
+            --parameters infra/main.bicepparam \
+            --output none
+
+      - name: Read deployment outputs
+        id: outputs
+        run: |
+          # Read hostnames from the deployment rather than building them. Default hostnames are
+          # normally predictable, but the unique-default-hostname feature can append a suffix,
+          # and a hand-built string breaks silently when it does.
+          outputs=$(az deployment group show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name librarysystem-infra \
+            --query properties.outputs \
+            --output json)
+
+          {
+            echo "apiAppName=$(echo "$outputs" | jq -r '.apiAppName.value')"
+            echo "apiHostName=$(echo "$outputs" | jq -r '.apiHostName.value')"
+          } >> "$GITHUB_OUTPUT"
+
+  api:
+    name: API
+    runs-on: ubuntu-latest
+    needs: infrastructure
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Publish
+        run: dotnet publish src/LibrarySystem.Api --configuration Release --output publish
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ needs.infrastructure.outputs.apiAppName }}
+          package: publish
+
+      - name: Check the API responds
+        run: |
+          # F1 has no Always On and the serverless database resumes from auto-pause, so a cold
+          # environment can be slow to answer the first request. Retry rather than failing on
+          # the first timeout.
+          base="https://${{ needs.infrastructure.outputs.apiHostName }}"
+          for attempt in $(seq 1 8); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 90 "$base/health" || true)
+            echo "attempt $attempt: HTTP $code"
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "API did not become healthy at $base/health"
+          exit 1
