@@ -139,10 +139,11 @@ resource apiAppSettings 'Microsoft.Web/sites/config@2023-12-01' = {
   name: 'appsettings'
   properties: {
     ASPNETCORE_ENVIRONMENT: 'Production'
-    // True for now, so the application creates its own schema. The migrations phase moves this
-    // job into the pipeline and flips this to false, at which point the running application no
-    // longer needs DDL rights against the database.
-    Database__MigrateOnStartup: 'true'
+    // False: the pipeline owns the schema now. Two reasons this matters beyond tidiness. A
+    // multi-instance app would have every instance racing to migrate the same database at boot.
+    // And migrating at startup obliges the public-facing process to hold DDL rights permanently,
+    // when all it ever needs at runtime is to read and write rows.
+    Database__MigrateOnStartup: 'false'
     // The SPA's origin, supplied by the deployment rather than hardcoded anywhere. The scheme
     // matters: the browser sends the origin as https, and an http value here would not match.
     Cors__AllowedOrigins__0: 'https://${webApp.properties.defaultHostName}'
