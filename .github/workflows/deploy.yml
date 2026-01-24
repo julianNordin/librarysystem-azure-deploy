@@ -29,6 +29,9 @@ jobs:
     outputs:
       apiAppName: ${{ steps.outputs.outputs.apiAppName }}
       apiHostName: ${{ steps.outputs.outputs.apiHostName }}
+      sqlServerName: ${{ steps.outputs.outputs.sqlServerName }}
+      sqlServerFqdn: ${{ steps.outputs.outputs.sqlServerFqdn }}
+      sqlDatabaseName: ${{ steps.outputs.outputs.sqlDatabaseName }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -79,12 +82,120 @@ jobs:
           {
             echo "apiAppName=$(echo "$outputs" | jq -r '.apiAppName.value')"
             echo "apiHostName=$(echo "$outputs" | jq -r '.apiHostName.value')"
+            echo "sqlServerName=$(echo "$outputs" | jq -r '.sqlServerName.value')"
+            echo "sqlServerFqdn=$(echo "$outputs" | jq -r '.sqlServerFullyQualifiedDomainName.value')"
+            echo "sqlDatabaseName=$(echo "$outputs" | jq -r '.sqlDatabaseName.value')"
           } >> "$GITHUB_OUTPUT"
+
+  migrate:
+    name: Database migrations
+    runs-on: ubuntu-latest
+    needs: infrastructure
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build the migrations bundle
+        # `migrations bundle`, never `migrations add`. Bundle packages the migrations that
+        # already exist into a self-contained executable; add would generate a new one and stamp
+        # today's date into both its filename and its [Migration] attribute.
+        run: |
+          dotnet tool install --global dotnet-ef --version 9.*
+          dotnet ef migrations bundle \
+            --project src/LibrarySystem.Api \
+            --startup-project src/LibrarySystem.Api \
+            --self-contained -r linux-x64 \
+            --configuration Release \
+            --output efbundle \
+            --force
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Open the SQL firewall for this runner
+        id: firewall
+        run: |
+          # The runner's address is not in the firewall: the hardening pass narrowed it to the
+          # API app's outbound addresses. Open a hole for exactly this address, and nothing more.
+          runner_ip=$(curl -s --max-time 30 https://api.ipify.org)
+          echo "runner ip: $runner_ip"
+          {
+            echo "rule=migrate-${{ github.run_id }}"
+            echo "ip=$runner_ip"
+          } >> "$GITHUB_OUTPUT"
+          az sql server firewall-rule create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --server "${{ needs.infrastructure.outputs.sqlServerName }}" \
+            --name "migrate-${{ github.run_id }}" \
+            --start-ip-address "$runner_ip" \
+            --end-ip-address "$runner_ip" \
+            --output none
+
+      - name: Apply migrations
+        env:
+          SQL_ADMIN_PASSWORD: ${{ secrets.SQL_ADMIN_PASSWORD }}
+          SQL_SERVER_NAME: ${{ needs.infrastructure.outputs.sqlServerName }}
+          SQL_SERVER_FQDN: ${{ needs.infrastructure.outputs.sqlServerFqdn }}
+          SQL_DATABASE_NAME: ${{ needs.infrastructure.outputs.sqlDatabaseName }}
+          FIREWALL_RULE: ${{ steps.firewall.outputs.rule }}
+          OPENED_FOR_IP: ${{ steps.firewall.outputs.ip }}
+        run: |
+          chmod +x ./efbundle
+          connection="Server=tcp:${SQL_SERVER_FQDN},1433;Initial Catalog=${SQL_DATABASE_NAME};User ID=libsysadmin;Password=${SQL_ADMIN_PASSWORD};Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;"
+
+          if ./efbundle --connection "$connection" 2>migrate-err.txt; then
+            echo "migrations applied"
+            exit 0
+          fi
+
+          # A public echo service reports the address used to reach *it*, over HTTPS. Behind a
+          # NAT pool the SQL connection can leave from a different address, leaving the rule
+          # correct for the wrong one. The server's error names the address it actually saw,
+          # which is authoritative - take it and try once more.
+          cat migrate-err.txt
+          reported=$(grep -oE "Client with IP address '[0-9.]+'" migrate-err.txt \
+            | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | head -1)
+
+          if [ -z "$reported" ] || [ "$reported" = "$OPENED_FOR_IP" ]; then
+            echo "migration failed for a reason other than the firewall address"
+            exit 1
+          fi
+
+          echo "the server saw $reported instead; reopening for that address"
+          az sql server firewall-rule create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --server "$SQL_SERVER_NAME" \
+            --name "$FIREWALL_RULE" \
+            --start-ip-address "$reported" \
+            --end-ip-address "$reported" \
+            --output none
+          sleep 10
+          ./efbundle --connection "$connection"
+
+      - name: Close the SQL firewall
+        # always(): a failed migration must never be the reason the database is left reachable
+        # from a GitHub runner. This is the whole point of splitting the rule into its own step.
+        if: always() && steps.firewall.outputs.rule != ''
+        run: |
+          az sql server firewall-rule delete \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --server "${{ needs.infrastructure.outputs.sqlServerName }}" \
+            --name "${{ steps.firewall.outputs.rule }}" \
+            --output none
 
   api:
     name: API
     runs-on: ubuntu-latest
-    needs: infrastructure
+    needs: [infrastructure, migrate]
     steps:
       - name: Check out
         uses: actions/checkout@v4
