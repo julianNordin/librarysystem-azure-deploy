@@ -26,6 +26,7 @@
 param(
     [string] $ResourceGroup = 'rg-librarysystem-dev',
     [string] $Location = 'swedencentral',
+    [string] $SqlAdminLogin = 'libsysadmin',
     [string] $SqlAdminPassword = $env:SQL_ADMIN_PASSWORD
 )
 
@@ -80,9 +81,89 @@ $outputs = az deployment group show `
 
 $apiAppName = $outputs.apiAppName.value
 $apiHostName = $outputs.apiHostName.value
+$sqlServerName = $outputs.sqlServerName.value
+$sqlServerFqdn = $outputs.sqlServerFullyQualifiedDomainName.value
+$sqlDatabaseName = $outputs.sqlDatabaseName.value
 
 Write-Host "    api app : $apiAppName"
 Write-Host "    api host: $apiHostName"
+Write-Host "    sql     : $sqlServerFqdn"
+
+Write-Step 'Applying database migrations'
+# A migrations bundle is a self-contained executable holding the migrations that already exist.
+# It is built here rather than being committed, and note it is `migrations bundle`, never
+# `migrations add` - the latter stamps the real date into a filename and into the [Migration]
+# attribute, which then has to be unpicked later.
+$bundle = Join-Path $stagingRoot 'efbundle.exe'
+dotnet ef migrations bundle `
+    --project (Join-Path $repoRoot 'src/LibrarySystem.Api') `
+    --startup-project (Join-Path $repoRoot 'src/LibrarySystem.Api') `
+    --self-contained -r win-x64 `
+    --configuration Release `
+    --output $bundle `
+    --force
+
+# This machine is not in the SQL firewall - the hardening pass narrowed it to the API app's
+# outbound addresses only. So open a hole for this address, migrate, and close it again. The
+# close has to happen even when the migration throws: a failed deployment must never be the
+# reason the database is left reachable from somewhere it should not be.
+$migrationFirewallRule = 'migrate-temp'
+
+function Set-MigrationFirewallRule {
+    param([string] $IpAddress)
+    az sql server firewall-rule create `
+        --resource-group $ResourceGroup `
+        --server $sqlServerName `
+        --name $migrationFirewallRule `
+        --start-ip-address $IpAddress `
+        --end-ip-address $IpAddress `
+        --output none
+}
+
+$migrationConnection = "Server=tcp:$sqlServerFqdn,1433;Initial Catalog=$sqlDatabaseName;User ID=$SqlAdminLogin;Password=$SqlAdminPassword;Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;"
+
+try {
+    $publicIp = (Invoke-RestMethod -Uri 'https://api.ipify.org?format=json' -TimeoutSec 30).ip
+    Write-Host "    opening the firewall for $publicIp"
+    Set-MigrationFirewallRule -IpAddress $publicIp
+
+    $output = & $bundle --connection $migrationConnection 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        # A public echo service reports the address used to reach *it*, over HTTPS. Behind a NAT
+        # pool the SQL connection can leave from a different address entirely, and then the rule
+        # is correct for the wrong address. The server's own error names the address it actually
+        # saw, which is the authoritative answer - so take it and try once more.
+        $reportedIp = [regex]::Match(
+            ($output -join "`n"),
+            "Client with IP address '([0-9]{1,3}(?:\.[0-9]{1,3}){3})'").Groups[1].Value
+
+        if ($reportedIp -and $reportedIp -ne $publicIp) {
+            Write-Host "    the server saw $reportedIp instead; reopening for that address"
+            Set-MigrationFirewallRule -IpAddress $reportedIp
+            # Firewall changes are not always instant.
+            Start-Sleep -Seconds 10
+            $output = & $bundle --connection $migrationConnection 2>&1
+        }
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        $output | ForEach-Object { Write-Host $_ }
+        throw "Migration bundle failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Host '    migrations applied'
+}
+finally {
+    # Always, including when the migration threw. A failed deployment must never be the reason
+    # the database is left reachable from somewhere it should not be.
+    Write-Host '    closing the firewall'
+    az sql server firewall-rule delete `
+        --resource-group $ResourceGroup `
+        --server $sqlServerName `
+        --name $migrationFirewallRule `
+        --output none
+}
 
 Write-Step 'Publishing the API'
 $publishDir = Join-Path $stagingRoot 'api-publish'
