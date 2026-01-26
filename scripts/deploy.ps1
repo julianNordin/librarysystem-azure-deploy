@@ -81,6 +81,8 @@ $outputs = az deployment group show `
 
 $apiAppName = $outputs.apiAppName.value
 $apiHostName = $outputs.apiHostName.value
+$webAppName = $outputs.webAppName.value
+$webHostName = $outputs.webHostName.value
 $sqlServerName = $outputs.sqlServerName.value
 $sqlServerFqdn = $outputs.sqlServerFullyQualifiedDomainName.value
 $sqlDatabaseName = $outputs.sqlDatabaseName.value
@@ -188,29 +190,45 @@ az webapp deploy `
     --type zip `
     --output none
 
-Write-Step 'Checking the API responds'
-# F1 has no Always On and the database resumes from auto-pause, so a cold environment can be slow
-# to answer the first request. Retry rather than failing on the first timeout.
-$apiBase = "https://$apiHostName"
-$healthy = $false
-foreach ($attempt in 1..8) {
-    try {
-        $response = Invoke-WebRequest -Uri "$apiBase/health" -TimeoutSec 90 -SkipHttpErrorCheck
-        Write-Host "    attempt ${attempt}: HTTP $($response.StatusCode)"
-        if ($response.StatusCode -eq 200) {
-            $healthy = $true
-            break
-        }
-    }
-    catch {
-        Write-Host "    attempt ${attempt}: $($_.Exception.Message)"
-    }
-    Start-Sleep -Seconds 20
+Write-Step 'Building the SPA'
+# The API URL is baked in at build time by Vite, so the front end cannot be built before the API
+# hostname is known - which is why this comes after the infrastructure deployment rather than
+# alongside it. No trailing slash: apiClient concatenates '/api/books' onto this directly.
+$webDir = Join-Path $repoRoot 'src/web'
+$webZip = Join-Path $stagingRoot 'web.zip'
+$env:VITE_API_BASE_URL = "https://$apiHostName"
+Write-Host "    VITE_API_BASE_URL=$env:VITE_API_BASE_URL"
+
+Push-Location $webDir
+try {
+    npm ci
+    npm run build
+}
+finally {
+    Pop-Location
 }
 
-if (-not $healthy) {
-    throw "The API did not become healthy at $apiBase/health"
+if (Test-Path -LiteralPath $webZip) {
+    Remove-Item -LiteralPath $webZip -Force
+}
+Compress-Archive -Path (Join-Path $webDir 'dist/*') -DestinationPath $webZip -Force
+
+Write-Step 'Deploying the SPA'
+az webapp deploy `
+    --resource-group $ResourceGroup `
+    --name $webAppName `
+    --src-path $webZip `
+    --type zip `
+    --output none
+
+Write-Step 'Smoke testing the deployed environment'
+# The same script the pipeline's smoke job runs, so what is proven here is what runs there.
+& (Join-Path $PSScriptRoot 'smoke.ps1') -ApiHostName $apiHostName -WebHostName $webHostName
+if ($LASTEXITCODE -ne 0) {
+    throw 'Smoke test failed.'
 }
 
 Write-Host ''
-Write-Host "Done. API: $apiBase" -ForegroundColor Green
+Write-Host "Done." -ForegroundColor Green
+Write-Host "  API: https://$apiHostName"
+Write-Host "  SPA: https://$webHostName"
