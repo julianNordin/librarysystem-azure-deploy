@@ -119,3 +119,49 @@ and is recorded as further work rather than pretended away.
 longer deploy code. `az webapp deploy` continues to work because it authenticates with the Entra
 token from `az login` rather than with basic auth — which is the same mechanism the pipeline's
 federated credential uses, and the reason turning this off costs nothing here.
+
+## Scaling down fails while the apps have Always On enabled
+
+Going from S1 back to F1 fails, and the error names the wrong thing:
+
+```
+Cannot update the site 'app-librarysystem-web-...' because it uses AlwaysOn
+feature which is not allowed in the target compute mode.
+```
+
+The template derives `alwaysOn` from the SKU parameter, so flipping the parameter to F1 *should*
+turn Always On off. The problem is ordering: the sites depend on the plan, so ARM updates the
+plan first — and the plan cannot move to a tier that forbids a feature its sites still have
+enabled. The template is self-consistent and still cannot apply itself in one pass.
+
+Turn the feature off first, then deploy:
+
+```bash
+az webapp config set -n <api app> -g rg-librarysystem-dev --always-on false
+az webapp config set -n <web app> -g rg-librarysystem-dev --always-on false
+az deployment group create -g rg-librarysystem-dev -f infra/main.bicep -p infra/main.bicepparam
+```
+
+This is worth knowing before it happens, because the failure leaves the plan at **the more
+expensive tier** while looking like an ordinary deployment error. A scale-down that silently
+does not scale down is the one failure mode in this project that actually costs money.
+
+## A deployment slot has its own identity, and it starts with no access
+
+Creating a staging slot and assigning it a system-assigned identity produces a **different
+principal** from the production app's. The vault's role assignment names the production
+principal, so the slot cannot read the connection string and every request to it returns 500.
+
+Observed exactly that: the freshly deployed slot returned 500 until its own principal was granted
+`Key Vault Secrets User` on the vault, after which it returned 200.
+
+This matters more than it first appears. A slot that cannot start is a slot that must not be
+swapped — and swapping it would replace a working production app with a broken one. Grant the
+slot's identity access and confirm the slot is healthy *before* swapping, never after.
+
+## "Zero downtime" is very nearly true, not exactly true
+
+Polling production once a second across a swap recorded 85 successful responses, three 503s and
+two failed connections — about five seconds of disruption on an app with no warm-up path
+configured. Small, and far better than a restart, but not literally zero. `WEBSITE_SWAP_WARMUP_PING_PATH`
+pointed at `/health` would shrink it further.

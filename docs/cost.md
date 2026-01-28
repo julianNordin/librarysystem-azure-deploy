@@ -73,3 +73,17 @@ az resource list --query "[?resourceGroup=='rg-librarysystem-dev']"
 
 A subscription budget with alert thresholds is configured as a backstop, so that a mistake
 surfaces as a notification rather than as a surprise at the end of the month.
+
+## What the slot demonstration actually cost
+
+The plan was scaled to S1, a staging slot created and deployed to, swapped into production, the
+slot deleted, and the plan returned to F1 — all in one session, about **twelve minutes at
+Standard tier**. App Service bills by the hour but meters below it, so the charge is roughly a
+fifth of one S1 hour. Confirm the exact figure in Cost analysis rather than trusting an estimate
+here; hourly rates are regional and change.
+
+Everything else in the project ran on always-free SKUs throughout.
+
+The scale up and the scale down were each a single parameter in `main.bicepparam` plus a
+redeploy, which is the actual thing being demonstrated: tier is a property of the description of
+the system, not a manual operation performed on it.
