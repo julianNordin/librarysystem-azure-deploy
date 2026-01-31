@@ -113,6 +113,27 @@ The genuinely correct design is VNet integration with a private endpoint, leavin
 with no public surface at all. That requires Standard tier or better, so it is out of reach on F1
 and is recorded as further work rather than pretended away.
 
+### These rules are not what grants the App Service access
+
+Tested directly, because "the app still works after narrowing the firewall" turned out to prove
+nothing. **With every rule deleted — zero firewall rules on the server — the API still read rows
+from the database**, while a workstation was refused with error 40615 at the same moment.
+
+So the allow-list is doing less than it appears to. It demonstrably blocks clients on the public
+internet, which is real and worth having. It is *not* the mechanism by which the App Service
+reaches the database: same-region App Service traffic evidently arrives over an internal path
+that the public-endpoint IP rules do not govern. The exact mechanism was not established here,
+and nothing in this repository should be read as claiming it was.
+
+Two consequences worth stating plainly:
+
+- **Do not treat "the application still works" as evidence that a firewall change was correct.**
+  It would have worked with no rules at all. A firewall change is verified by confirming what it
+  *blocks*, from outside, which is the check that actually discriminated here.
+- The rules are kept because depending on undocumented internal reachability is not a security
+  posture. But the honest summary is that a private endpoint is not merely the *better* answer —
+  it is the only one whose behaviour here is fully explained.
+
 ## Basic publishing credentials are disabled, and deployment still works
 
 `scm` and `ftp` basic authentication are off on both apps, so a username and password can no
@@ -165,3 +186,20 @@ Polling production once a second across a swap recorded 85 successful responses,
 two failed connections — about five seconds of disruption on an app with no warm-up path
 configured. Small, and far better than a restart, but not literally zero. `WEBSITE_SWAP_WARMUP_PING_PATH`
 pointed at `/health` would shrink it further.
+
+## Deleting a slot leaves its role assignment behind
+
+Deleting the staging slot removed the slot, but **not** the `Key Vault Secrets User` assignment
+granted to the slot's managed identity. It survived as an assignment naming a principal that no
+longer exists — visible in the portal as an "Identity not found" entry.
+
+Harmless in itself, since the principal is gone, but it is exactly the kind of residue that
+accumulates into an access list nobody can reason about. Remove it with the slot:
+
+```bash
+az role assignment list --scope <vault resource id> \
+  --query "[?principalId=='<slot principal id>'].id" -o tsv \
+  | xargs -r az role assignment delete --ids
+```
+
+Read the slot's principal id *before* deleting the slot; afterwards there is nothing left to ask.

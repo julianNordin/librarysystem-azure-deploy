@@ -136,8 +136,12 @@ Recorded rather than glossed over:
   needs an Entra admin on the logical server and DDL grants issued to the identity — the honest
   next step for this design.
 - **The database has a public endpoint**, restricted by firewall to the API app's possible
-  outbound addresses. VNet integration with a private endpoint would remove the public surface
-  altogether; it requires a Standard tier or better and so is out of reach on F1.
+  outbound addresses. That allow-list verifiably blocks clients on the public internet — but
+  testing showed it is *not* what grants the App Service its access: with every rule deleted, the
+  API still read rows while an external client was refused. Same-region traffic evidently arrives
+  over an internal path the public-endpoint rules do not govern. VNet integration with a private
+  endpoint is therefore not just the better answer but the only one whose behaviour is fully
+  explained; it requires Standard tier or better and so is out of reach on F1.
 - **Key Vault purge protection is off**, deliberately, because this environment is built to be
   destroyed and rebuilt and a protected vault holds its name for the whole soft-delete retention
   period. For anything long-lived it should be on. The reasoning is in
