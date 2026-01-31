@@ -17,8 +17,11 @@ here. The subject of this project is the deployment.
   own system-assigned managed identity. No password appears in any application setting.
 - **A pipeline with no stored credential.** Deployment authenticates with OIDC federated
   credentials. There is no service principal secret, in GitHub or anywhere else.
-- **Least privilege.** The pipeline identity holds Contributor on one resource group, never on
-  the subscription. The API's identity may read one secret from one vault, and nothing else.
+- **Least privilege.** The pipeline identity is scoped to one resource group, never the
+  subscription: Contributor to manage resources, plus RBAC Administrator **conditioned so it can
+  assign exactly one role definition and no other** — because Contributor cannot create role
+  assignments at all, and an unconditioned grant would let the pipeline make itself Owner. The
+  API's identity may read one secret from one vault, and nothing else.
 - **Telemetry from a service actually serving traffic**, including dependency tracing through to
   the database tier.
 - **A deploy that verifies itself.** A smoke test asserts the environment really works and fails
@@ -126,6 +129,10 @@ command:
 ```powershell
 ./scripts/teardown.ps1
 ```
+
+Teardown deletes the resource group, which also deletes the pipeline's role assignments, since
+they are scoped to it. Recreate the group and those assignments before the next pipeline run —
+see [`docs/architecture.md`](docs/architecture.md#the-bootstrap-and-what-teardown-takes-with-it).
 
 ## Known limitations
 

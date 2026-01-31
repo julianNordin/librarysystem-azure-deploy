@@ -89,8 +89,69 @@ az ad app federated-credential list --id <app id>
 
 ### Least privilege
 
-The identity holds **Contributor on the resource group only** — never on the subscription. It can
-build and destroy this environment and has no standing permission anywhere else in the tenant.
+The identity holds two assignments, **both scoped to the resource group** and neither to the
+subscription:
+
+| Role | Why |
+|---|---|
+| Contributor | create and manage the resources themselves |
+| Role Based Access Control Administrator | assign one role to one identity — see below |
+
+**Contributor cannot create role assignments.** Access management is deliberately excluded from
+it, so `Microsoft.Authorization/roleAssignments/write` is denied. The templates create exactly one
+role assignment — granting the API app's managed identity read access to the vault — and that
+single line fails the whole deployment without a second role.
+
+The second role is granted with an **ABAC condition restricting it to assigning one specific
+role definition**, `Key Vault Secrets User`:
+
+```
+((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'}))
+  OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId]
+      ForAnyOfAnyValues:GuidEquals{4633458b-17de-408a-b874-0445c86b69e6}))
+AND ...same for delete...
+```
+
+Without that condition, an identity holding RBAC Administrator on a scope can grant *itself*
+Owner on that scope, which quietly turns least privilege into full control. The condition is what
+keeps the grant honest: the pipeline may assign that one role and no other.
+
+```bash
+az role assignment list --assignee <app id> --all \
+  --query '[].{role:roleDefinitionName, scope:scope, condition:condition}'
+```
+
+The `--all` matters: without it the command reports only the current subscription's default scope
+and would hide an assignment made higher up.
+
+### The bootstrap, and what teardown takes with it
+
+Two things must exist before the pipeline can run, and **neither can be created by the pipeline**:
+
+1. the resource group, and
+2. the two role assignments above, which are scoped *to* that group.
+
+This is not an oversight; it is the shape of the problem. An identity scoped to a resource group
+cannot create that resource group, because until the group exists there is nothing for its
+permission to attach to. Someone with subscription rights performs this once.
+
+The consequence is easy to miss: **`scripts/teardown.ps1` deletes the resource group, and the role
+assignments go with it.** Rebuilding therefore means recreating the group and both assignments
+first, or the pipeline fails at sign-in with `No subscriptions found` — an error that names
+neither role assignments nor the resource group:
+
+```bash
+az group create -n rg-librarysystem-dev -l swedencentral
+# then re-create both role assignments at that scope
+```
+
+RBAC changes take a few minutes to propagate. A run started immediately after granting a role can
+still fail as though nothing was granted.
+
+**None of this was discoverable locally.** `scripts/deploy.ps1` runs as whoever is signed in — an
+Owner, during development — so it created the role assignment without difficulty every single
+time. Only a real pipeline run, as the actual pipeline identity, against an environment that had
+genuinely been destroyed, surfaced it.
 
 ```bash
 az role assignment list --assignee <app id> --all --query '[].{role:roleDefinitionName, scope:scope}'
