@@ -141,3 +141,35 @@ differently:
 
 A pipeline that can only be debugged by pushing to it is a bad pipeline regardless, so having a
 locally runnable equivalent is worth having on its own merits.
+
+## Resource inventory
+
+Everything the templates create, in one resource group. Names carrying `<uniq>` take a
+`uniqueString(resourceGroup().id)` suffix, which is deterministic: deploying into a group of the
+same name produces the same names every time, which is what makes redeployment idempotent rather
+than additive.
+
+| Resource | Type | Notes |
+|---|---|---|
+| `plan-librarysystem-dev` | `Microsoft.Web/serverFarms` | F1 Windows, shared by both apps |
+| `app-librarysystem-api-<uniq>` | `Microsoft.Web/sites` | ASP.NET Core 9, system-assigned identity |
+| `app-librarysystem-web-<uniq>` | `Microsoft.Web/sites` | static SPA, IIS rewrite for client routing |
+| `sql-librarysystem-<uniq>` | `Microsoft.Sql/servers` | logical server, SQL authentication |
+| `sqldb-librarysystem` | `Microsoft.Sql/servers/databases` | `GP_S_Gen5_2` serverless, free offer, auto-pause |
+| `kv-libsys-<uniq>` | `Microsoft.KeyVault/vaults` | RBAC mode; holds the connection string |
+| `appi-librarysystem-dev` | `Microsoft.Insights/components` | workspace-based Application Insights |
+| `log-librarysystem-dev` | `Microsoft.OperationalInsights/workspaces` | backs the component above |
+
+Two resources appear in the group without being declared anywhere. The SQL server's `master`
+database is created by the platform alongside any logical server, and an
+`Application Insights Smart Detection` action group is created the first time a component starts
+receiving telemetry. Neither is drift, and neither should be added to the templates.
+
+Outside the resource group, and therefore untouched by teardown:
+
+- the **Entra app registration** and its federated credential, which the pipeline authenticates
+  as. It holds no secret, and it survives the environment being destroyed and rebuilt.
+- its **Contributor role assignment**, scoped to the resource group. Recreating a group of the
+  same name restores the assignment's target.
+- a **subscription budget** with alerts at 50% and 90%, which exists precisely so that a mistake
+  arrives as a notification rather than as a surprise at the end of the month.
