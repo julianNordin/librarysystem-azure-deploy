@@ -19,8 +19,19 @@ builder.Services.AddSwaggerGen(options =>
     options.IncludeXmlComments(xmlPath);
 });
 
+// Retry on transient faults. This is not generic defensiveness: a serverless Azure SQL
+// database is *unavailable by design* while it resumes from auto-pause, and reports it as a
+// transient error. Without this, the first request after an idle period fails outright.
+//
+// Safe here because nothing in this codebase opens an explicit transaction - a retrying
+// execution strategy refuses to wrap user-initiated transactions and throws if one is started.
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        sqlServer => sqlServer.EnableRetryOnFailure(
+            maxRetryCount: 6,
+            maxRetryDelay: TimeSpan.FromSeconds(20),
+            errorNumbersToAdd: null)));
 
 builder.Services.AddScoped<IBookService, BookService>();
 builder.Services.AddScoped<IMemberService, MemberService>();
@@ -82,7 +93,8 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     DatabaseStartup.Initialize(
         db,
-        app.Configuration.GetValue("Database:MigrateOnStartup", true));
+        app.Configuration.GetValue("Database:MigrateOnStartup", true),
+        scope.ServiceProvider.GetRequiredService<ILogger<Program>>());
 }
 
 app.UseExceptionHandler();
