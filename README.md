@@ -8,6 +8,15 @@ credential of any kind**.
 The application is not the interesting part. It already existed, and its code barely changes
 here. The subject of this project is the deployment.
 
+## Related projects
+
+This repo vendors snapshots of two standalone projects without their git history (see
+[Repository layout](#repository-layout)) so it can build, test and deploy end to end on its
+own. For their full commit history, see the originals:
+
+- [LibrarySystem.Api](https://github.com/julianNordin/LibrarySystem.Api) — the API developed on its own
+- [LibrarySystem.Web](https://github.com/julianNordin/LibrarySystem.Web) — the frontend developed on its own
+
 ## What it demonstrates
 
 - **Infrastructure as code.** Every resource is declared in `infra/`. The environment is created,
