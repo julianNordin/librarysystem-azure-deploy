@@ -1,5 +1,7 @@
 # LibrarySystem on Azure
 
+[![CI](https://github.com/julianNordin/librarysystem-azure-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/julianNordin/librarysystem-azure-deploy/actions/workflows/ci.yml) [![Deploy](https://github.com/julianNordin/librarysystem-azure-deploy/actions/workflows/deploy.yml/badge.svg)](https://github.com/julianNordin/librarysystem-azure-deploy/actions/workflows/deploy.yml)
+
 An ASP.NET Core 9 API and a React 19 single-page app, deployed to Azure entirely from code:
 infrastructure defined in Bicep, secrets held in Key Vault and reached through a managed
 identity, and a GitHub Actions pipeline that authenticates to Azure **without storing a
